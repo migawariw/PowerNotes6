@@ -127,17 +127,25 @@ document.getElementById('google-login').onclick=async()=>{ try{ await signInWith
 
 userIcon.onclick=()=>{ userMenu.style.display=(userMenu.style.display==='block')?'none':'block'; }
 document.getElementById('switch-account').onclick=async()=>{ userMenu.style.display='none'; try{ await signInWithPopup(auth,provider); } catch(e){ alert("切替失敗"); } }
-document.getElementById('logout-btn').onclick=()=>{ userMenu.style.display='none'; signOut(auth); location.hash=''; }
+document.getElementById('logout-btn').onclick=()=>{ userMenu.style.display='none'; signOut(auth); location.hash='#login'; }
 
-onAuthStateChanged(auth,user=>{
+/* ------------------- Navigation ------------------- */
+onAuthStateChanged(auth, user => {
   if(user){
     if(user.photoURL) userIcon.src=user.photoURL;
-    location.hash = location.hash || '#/list'; // ログイン後リスト表示
+    if(!location.hash || location.hash==='#login') location.hash = '#/list';
+    navigate(); // <- 認証後に一度だけ呼ぶ
   } else {
-    location.hash = '#/login';
+    location.hash='#login';
+    show('login');
   }
 });
 
+window.addEventListener('hashchange', () => {
+  if(auth.currentUser) navigate(); // <- 認証済みのみ
+});
+
+/* ------------------- Load Memos ------------------- */
 async function loadMemos(){
   memoList.innerHTML='';
   const q=query(collection(db,'users',auth.currentUser.uid,'memos'),orderBy('updated','desc'));
@@ -149,7 +157,7 @@ async function loadMemos(){
     li.textContent=data.title||'Untitled';
     const rightDiv=document.createElement('div'); rightDiv.className='memo-right';
     const dateSpan=document.createElement('span'); dateSpan.className='date-span';
-    dateSpan.textContent=new Date(data.updated).toLocaleString([],{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+    dateSpan.textContent=new Date(data.updated).toLocaleString();
     const menuBtn=document.createElement('button'); menuBtn.textContent='…'; menuBtn.className='menu-btn';
     const menuPopup=document.createElement('div'); menuPopup.className='menu-popup';
     const copyAction=document.createElement('button'); copyAction.textContent='Copy'; copyAction.onclick=async(e)=>{ e.stopPropagation(); navigator.clipboard.writeText(data.content||''); showToast('Copied'); menuPopup.style.display='none'; }
@@ -159,6 +167,7 @@ async function loadMemos(){
     rightDiv.append(dateSpan,menuBtn,menuPopup);
     li.appendChild(rightDiv);
 
+    // Long press for preview
     li.addEventListener('mousedown',()=>{ longPressTimer=setTimeout(()=>{ showPreview(d.id,data.title,data.content); },500); });
     li.addEventListener('mouseup',()=>{ clearTimeout(longPressTimer); });
     li.addEventListener('mouseleave',()=>{ clearTimeout(longPressTimer); });
@@ -168,6 +177,7 @@ async function loadMemos(){
   });
 }
 
+/* ------------------- Load Trash ------------------- */
 async function loadTrash(){
   trashList.innerHTML='';
   const thirtyDaysAgo = Date.now() - 30*24*60*60*1000;
@@ -197,14 +207,7 @@ async function openEditor(id){
   editor.innerHTML=data.content||'';
   show('editor');
 }
-
-document.getElementById('back').onclick=()=>location.hash='#/list';
-document.getElementById('back-list').onclick=()=>location.hash='#/list';
-document.getElementById('new-memo').onclick=async()=>{
-  const ref=await addDoc(collection(db,'users',auth.currentUser.uid,'memos'),{title:'',content:'',updated:Date.now(),deletedAt:null});
-  location.hash=`#/editor/${ref.id}`;
-}
-document.getElementById('go-trash').onclick=()=>location.hash='#/trash';
+document.getElementById('back').onclick=()=>show('list');
 
 async function saveMemo(){
   if(!currentMemoId) return;
@@ -215,6 +218,7 @@ async function saveMemo(){
 editor.addEventListener('input',saveMemo);
 titleInput.addEventListener('input',saveMemo);
 
+/* Paste & link handling */
 editor.addEventListener('paste',e=>{
   e.preventDefault();
   const items=e.clipboardData.items;
@@ -232,22 +236,8 @@ editor.addEventListener('paste',e=>{
   else{ const urlRegex=/https?:\/\/\S+\.(?:png|jpg|jpeg|gif)/i; const m=text.match(urlRegex); if(m){ const img=document.createElement('img'); img.src=m[0]; range.insertNode(img); range.collapse(false); saveMemo(); } else{ document.execCommand('insertText',false,text); saveMemo(); } }
 });
 
-function showPreview(id,title,content){
-  previewContent.innerHTML=`<strong>${title}</strong><br>${content}`;
-  preview.hidden=false;
-  copyBtn.onclick=()=>{ navigator.clipboard.writeText(content||''); showToast('Copied'); }
-  deleteBtn.onclick=async()=>{ await setDoc(doc(db,'users',auth.currentUser.uid,'memos',id),{deletedAt:Date.now()},{merge:true}); preview.hidden=true; loadMemos(); showToast('Moved to Trash'); }
-  closePreview.onclick=()=>preview.hidden=true;
-}
-
-// Hash管理でビュー切替
-window.addEventListener('hashchange',async ()=>{
-  const hash = location.hash;
-  if(hash === '#/login'){ show('login'); }
-  else if(hash === '#/list'){ await loadMemos(); show('list'); }
-  else if(hash === '#/trash'){ await loadTrash(); show('trash'); }
-  else if(hash.startsWith('#/editor/')){ openEditor(hash.split('/')[2]); }
-});
+/* Hash change */
+window.addEventListener('hashchange',()=>{ if(location.hash.startsWith('#/editor/')) openEditor(location.hash.split('/')[2]); });
 
 </script>
 </body>
