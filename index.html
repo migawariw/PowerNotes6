@@ -91,13 +91,11 @@ button{cursor:pointer;}
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getFirestore, collection, addDoc, getDocs, doc, getDoc, setDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
-const firebaseConfig = { apiKey:"AIzaSyCdDf0GH80PoGlcbk2yjlaVQfP01Gk9m18", authDomain:"noteeditor-ba1db.firebaseapp.com", projectId:"noteeditor-ba1db", storageBucket:"noteeditor-ba1db.appspot.com" };
+const firebaseConfig = { apiKey:"AIzaSyCdDf0GH80PoGlcbk2yjlaVQfP01Gk9m18", authDomain:"noteeditor-ba1db.firebaseapp.com", projectId:"noteeditor-ba1db" };
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const storage = getStorage(app);
 
 const views={login:document.getElementById('view-login'),list:document.getElementById('view-list'),trash:document.getElementById('view-trash'),editor:document.getElementById('view-editor')};
 const emailInput=document.getElementById('email');
@@ -122,78 +120,43 @@ let isComposing=false;
 function showToast(msg,d=2000){ toast.textContent=msg; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),d); }
 function show(view){ Object.values(views).forEach(v=>v.hidden=true); views[view].hidden=false; }
 
-/* --- Auth --- */
 const provider=new GoogleAuthProvider();
+
+// Auth
 document.getElementById('login').onclick=()=>signInWithEmailAndPassword(auth,emailInput.value,passwordInput.value);
 document.getElementById('signup').onclick=()=>createUserWithEmailAndPassword(auth,emailInput.value,passwordInput.value);
 document.getElementById('google-login').onclick=async()=>{ try{ await signInWithPopup(auth,provider); } catch(e){ alert("エラー\n"+e.code); } }
+
 userIcon.onclick=()=>{ userMenu.style.display=(userMenu.style.display==='block')?'none':'block'; }
 document.getElementById('switch-account').onclick=async()=>{ userMenu.style.display='none'; try{ await signInWithPopup(auth,provider); } catch(e){ alert("切替失敗"); } }
 document.getElementById('logout-btn').onclick=()=>{ userMenu.style.display='none'; signOut(auth); location.hash='#login'; }
 
-/* --- Navigation --- */
-onAuthStateChanged(auth,user=>{
-  if(user){
-    if(user.photoURL) userIcon.src=user.photoURL;
-    if(!location.hash||location.hash==='#login') location.hash='#/list';
-    navigate();
-  } else { location.hash='#login'; show('login'); }
-});
-window.addEventListener('hashchange', ()=>{ if(auth.currentUser) navigate(); });
-
-/* --- YouTube変換 --- */
-function convertYouTubeLinks(container){
-  const regex = /https?:\/\/(www\.)?youtube\.com\/watch\?v=([\w-]+)/g;
-  container.innerHTML = container.innerHTML.replace(regex,(match,p1,videoId)=>{
-    return `<div class="video"><iframe src="https://www.youtube.com/embed/${videoId}" frameborder="0" allowfullscreen></iframe></div>`;
-  });
+// SPA navigate
+function navigate(){
+  const hash = location.hash;
+  if(hash.startsWith('#/editor/')) openEditor(hash.split('/')[2]);
+  else if(hash === '#/list') { show('list'); loadMemos(); }
+  else if(hash === '#/trash') { show('trash'); loadTrash(); }
+  else if(hash === '#login') show('login');
 }
 
-/* --- Paste処理 --- */
-editor.addEventListener('paste', async (e)=>{
-  e.preventDefault();
-  const clipboard = e.clipboardData;
-  if(!clipboard) return;
-
-  for(const item of clipboard.items){
-    if(item.type.startsWith('image/')){
-      const file = item.getAsFile();
-      const path = `users/${auth.currentUser.uid}/images/${Date.now()}-${file.name}`;
-      const storageRef = ref(storage,path);
-      await uploadBytes(storageRef,file);
-      const url = await getDownloadURL(storageRef);
-      const img = document.createElement('img');
-      img.src = url;
-      editor.appendChild(img);
-    }
-  }
-
-  const text = clipboard.getData('text/plain');
-  if(text){
-    const lines = text.split(/\r?\n/);
-    lines.forEach(line=>{
-      const div = document.createElement('div');
-      div.textContent = line;
-      convertYouTubeLinks(div);
-      editor.appendChild(div);
-    });
-  }
+// ページロード時
+window.addEventListener('DOMContentLoaded',()=>{
+  if(!location.hash) location.hash = '#/list';
+  navigate();
 });
+window.addEventListener('hashchange', navigate);
 
-/* --- IME対応 --- */
-editor.addEventListener('compositionstart',()=>{ isComposing=true; });
-editor.addEventListener('compositionend',()=>{ isComposing=false; saveMemo(); });
-editor.addEventListener('input',()=>{ if(!isComposing) saveMemo(); });
-titleInput.addEventListener('input',()=>{ if(!isComposing) saveMemo(); });
-
-/* --- Load / Trash / Editor --- */
+// Memo operations
 async function loadMemos(){
   memoList.innerHTML='';
   const q=query(collection(db,'users',auth.currentUser.uid,'memos'),orderBy('updated','desc'));
   const snap=await getDocs(q);
   snap.forEach(d=>{
-    const data=d.data(); if(data.deletedAt) return;
-    const li=document.createElement('li'); li.textContent=data.title||'Untitled';
+    const data=d.data();
+    if(data.deletedAt) return;
+    const li=document.createElement('li');
+    li.textContent=data.title||'Untitled';
     const rightDiv=document.createElement('div'); rightDiv.className='memo-right';
     const dateSpan=document.createElement('span'); dateSpan.className='date-span';
     dateSpan.textContent=new Date(data.updated).toLocaleString();
@@ -219,8 +182,10 @@ async function loadTrash(){
   const q=query(collection(db,'users',auth.currentUser.uid,'memos'),orderBy('deletedAt','desc'));
   const snap=await getDocs(q);
   snap.forEach(d=>{
-    const data=d.data(); if(!data.deletedAt || data.deletedAt<thirtyDaysAgo) return;
-    const li=document.createElement('li'); li.textContent=data.title||'Untitled';
+    const data=d.data();
+    if(!data.deletedAt || data.deletedAt<thirtyDaysAgo) return;
+    const li=document.createElement('li');
+    li.textContent=data.title||'Untitled';
     const rightDiv=document.createElement('div'); rightDiv.className='memo-right';
     const dateSpan=document.createElement('span'); dateSpan.className='date-span';
     dateSpan.textContent=new Date(data.deletedAt).toLocaleString();
@@ -238,7 +203,6 @@ async function openEditor(id){
   const data=snap.data();
   titleInput.value=data.title||'';
   editor.innerHTML=data.content||'';
-  convertYouTubeLinks(editor);
   show('editor');
 }
 
@@ -246,36 +210,50 @@ async function saveMemo(){
   if(!currentMemoId) return;
   let title=titleInput.value.trim();
   if(!title) title=editor.innerText.split('\n')[0].trim()||'';
-  convertYouTubeLinks(editor);
   await setDoc(doc(db,'users',auth.currentUser.uid,'memos',currentMemoId),{title,content:editor.innerHTML,updated:Date.now()},{merge:true});
 }
 
-/* --- Preview --- */
+// Buttons
+document.getElementById('new-memo').onclick=async()=>{
+  const ref=await addDoc(collection(db,'users',auth.currentUser.uid,'memos'),{title:'',content:'',updated:Date.now(),deletedAt:null});
+  location.hash=`#/editor/${ref.id}`;
+}
+document.getElementById('back').onclick=()=>location.hash='#/list';
+document.getElementById('back-list').onclick=()=>location.hash='#/list';
+document.getElementById('go-trash').onclick=()=>location.hash='#/trash';
+
+// Preview
 function showPreview(id,title,content){
   previewContent.innerHTML=`<strong>${title}</strong><br>${content}`;
   preview.hidden=false;
   copyBtn.onclick=()=>{ navigator.clipboard.writeText(content||''); showToast('Copied'); }
-  deleteBtn.onclick=async()=>{ await setDoc(doc(db,'users',auth.currentUser.uid,'memos',id),{deletedAt:Date.now()},{merge:true}); preview.hidden=true; await loadMemos(); showToast('Moved to Trash'); }
+  deleteBtn.onclick=async()=>{ await setDoc(doc(db,'users',auth.currentUser.uid,'memos',id),{deletedAt:Date.now()},{merge:true}); preview.hidden=true; loadMemos(); showToast('Moved to Trash'); }
   closePreview.onclick=()=>preview.hidden=true;
 }
 
-/* --- Navigation --- */
-async function navigate(){
-  const hash = location.hash;
-  if(hash.startsWith('#/editor/')) await openEditor(hash.split('/')[2]);
-  else if(hash==='#/list'||hash===''){ await loadMemos(); show('list'); }
-  else if(hash==='#/trash'){ await loadTrash(); show('trash'); }
-  else if(hash==='#login') show('login');
-}
+// Editor paste handling
+editor.addEventListener('paste',e=>{
+  e.preventDefault();
+  const items=e.clipboardData.items;
+  const range=document.getSelection().getRangeAt(0);
+  for(const item of items){
+    if(item.type.startsWith('image/')){
+      const reader=new FileReader();
+      reader.onload=()=>{ const img=document.createElement('img'); img.src=reader.result; range.insertNode(img); range.collapse(false); saveMemo(); }
+      reader.readAsDataURL(item.getAsFile()); return;
+    }
+  }
+  const text=e.clipboardData.getData('text/plain');
+  const yt=text.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
+  if(yt){ const wrap=document.createElement('div'); wrap.className='video'; const iframe=document.createElement('iframe'); iframe.src=`https://www.youtube-nocookie.com/embed/${yt[1]}?modestbranding=1&rel=0&playsinline=1`; iframe.allowFullscreen=true; wrap.appendChild(iframe); range.insertNode(wrap); range.collapse(false); saveMemo(); }
+  else{ const urlRegex=/https?:\/\/\S+\.(?:png|jpg|jpeg|gif)/i; const m=text.match(urlRegex); if(m){ const img=document.createElement('img'); img.src=m[0]; range.insertNode(img); range.collapse(false); saveMemo(); } else{ document.execCommand('insertText',false,text); saveMemo(); } }
+});
 
-/* --- Buttons --- */
-document.getElementById('back').onclick=()=>location.hash='#/list';
-document.getElementById('back-list').onclick=()=>location.hash='#/list';
-document.getElementById('go-trash').onclick=()=>location.hash='#/trash';
-document.getElementById('new-memo').onclick=async()=>{
-  const ref=await addDoc(collection(db,'users',auth.currentUser.uid,'memos'),{title:'',content:'',updated:Date.now(),deletedAt:null});
-  location.hash=`#/editor/${ref.id}`;
-};
+editor.addEventListener('compositionstart',()=>{ isComposing=true; });
+editor.addEventListener('compositionend',()=>{ isComposing=false; saveMemo(); });
+editor.addEventListener('input',()=>{ if(!isComposing) saveMemo(); });
+titleInput.addEventListener('input',()=>{ if(!isComposing) saveMemo(); });
+
 </script>
 </body>
 </html>
