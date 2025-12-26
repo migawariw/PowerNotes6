@@ -99,7 +99,6 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-/* ------------------- DOM ------------------- */
 const views={login:document.getElementById('view-login'),list:document.getElementById('view-list'),trash:document.getElementById('view-trash'),editor:document.getElementById('view-editor')};
 const emailInput=document.getElementById('email');
 const passwordInput=document.getElementById('password');
@@ -118,38 +117,31 @@ const closePreview=document.getElementById('close-preview');
 
 let currentMemoId=null;
 let longPressTimer=null;
+let isComposing=false;
 
 function showToast(msg,d=2000){ toast.textContent=msg; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),d); }
 function show(view){ Object.values(views).forEach(v=>v.hidden=true); views[view].hidden=false; }
 
-/* ------------------- Auth ------------------- */
+/* --- Auth --- */
 const provider=new GoogleAuthProvider();
-
 document.getElementById('login').onclick=()=>signInWithEmailAndPassword(auth,emailInput.value,passwordInput.value);
 document.getElementById('signup').onclick=()=>createUserWithEmailAndPassword(auth,emailInput.value,passwordInput.value);
 document.getElementById('google-login').onclick=async()=>{ try{ await signInWithPopup(auth,provider); } catch(e){ alert("エラー\n"+e.code); } }
-
 userIcon.onclick=()=>{ userMenu.style.display=(userMenu.style.display==='block')?'none':'block'; }
 document.getElementById('switch-account').onclick=async()=>{ userMenu.style.display='none'; try{ await signInWithPopup(auth,provider); } catch(e){ alert("切替失敗"); } }
 document.getElementById('logout-btn').onclick=()=>{ userMenu.style.display='none'; signOut(auth); location.hash='#login'; }
 
-/* ------------------- Navigation ------------------- */
-onAuthStateChanged(auth, user => {
+/* --- Navigation --- */
+onAuthStateChanged(auth,user=>{
   if(user){
     if(user.photoURL) userIcon.src=user.photoURL;
-    if(!location.hash || location.hash==='#login') location.hash = '#/list';
-    navigate(); // 認証後に一度だけ呼ぶ
-  } else {
-    location.hash='#login';
-    show('login');
-  }
+    if(!location.hash||location.hash==='#login') location.hash='#/list';
+    navigate();
+  } else { location.hash='#login'; show('login'); }
 });
+window.addEventListener('hashchange', ()=>{ if(auth.currentUser) navigate(); });
 
-window.addEventListener('hashchange', () => {
-  if(auth.currentUser) navigate();
-});
-
-/* ------------------- YouTube変換 ------------------- */
+/* --- YouTube変換 --- */
 function convertYouTubeLinks(container){
   const regex = /https?:\/\/(www\.)?youtube\.com\/watch\?v=([\w-]+)/g;
   container.innerHTML = container.innerHTML.replace(regex,(match,p1,videoId)=>{
@@ -157,13 +149,12 @@ function convertYouTubeLinks(container){
   });
 }
 
-/* ------------------- Paste処理 ------------------- */
+/* --- Paste処理 --- */
 editor.addEventListener('paste', async (e)=>{
   e.preventDefault();
   const clipboard = e.clipboardData;
   if(!clipboard) return;
 
-  // 画像をアップロード
   for(const item of clipboard.items){
     if(item.type.startsWith('image/')){
       const file = item.getAsFile();
@@ -177,26 +168,32 @@ editor.addEventListener('paste', async (e)=>{
     }
   }
 
-  // テキストを貼り付け
   const text = clipboard.getData('text/plain');
   if(text){
-    const div = document.createElement('div');
-    div.textContent = text;
-    editor.appendChild(div);
-    convertYouTubeLinks(div);
+    const lines = text.split(/\r?\n/);
+    lines.forEach(line=>{
+      const div = document.createElement('div');
+      div.textContent = line;
+      convertYouTubeLinks(div);
+      editor.appendChild(div);
+    });
   }
 });
 
-/* ------------------- Load Memos ------------------- */
+/* --- IME対応 --- */
+editor.addEventListener('compositionstart',()=>{ isComposing=true; });
+editor.addEventListener('compositionend',()=>{ isComposing=false; saveMemo(); });
+editor.addEventListener('input',()=>{ if(!isComposing) saveMemo(); });
+titleInput.addEventListener('input',()=>{ if(!isComposing) saveMemo(); });
+
+/* --- Load / Trash / Editor --- */
 async function loadMemos(){
   memoList.innerHTML='';
   const q=query(collection(db,'users',auth.currentUser.uid,'memos'),orderBy('updated','desc'));
   const snap=await getDocs(q);
   snap.forEach(d=>{
-    const data=d.data();
-    if(data.deletedAt) return;
-    const li=document.createElement('li');
-    li.textContent=data.title||'Untitled';
+    const data=d.data(); if(data.deletedAt) return;
+    const li=document.createElement('li'); li.textContent=data.title||'Untitled';
     const rightDiv=document.createElement('div'); rightDiv.className='memo-right';
     const dateSpan=document.createElement('span'); dateSpan.className='date-span';
     dateSpan.textContent=new Date(data.updated).toLocaleString();
@@ -216,17 +213,14 @@ async function loadMemos(){
   });
 }
 
-/* ------------------- Trash ------------------- */
 async function loadTrash(){
   trashList.innerHTML='';
   const thirtyDaysAgo = Date.now() - 30*24*60*60*1000;
   const q=query(collection(db,'users',auth.currentUser.uid,'memos'),orderBy('deletedAt','desc'));
   const snap=await getDocs(q);
   snap.forEach(d=>{
-    const data=d.data();
-    if(!data.deletedAt || data.deletedAt<thirtyDaysAgo) return;
-    const li=document.createElement('li');
-    li.textContent=data.title||'Untitled';
+    const data=d.data(); if(!data.deletedAt || data.deletedAt<thirtyDaysAgo) return;
+    const li=document.createElement('li'); li.textContent=data.title||'Untitled';
     const rightDiv=document.createElement('div'); rightDiv.className='memo-right';
     const dateSpan=document.createElement('span'); dateSpan.className='date-span';
     dateSpan.textContent=new Date(data.deletedAt).toLocaleString();
@@ -238,7 +232,6 @@ async function loadTrash(){
   });
 }
 
-/* ------------------- Editor ------------------- */
 async function openEditor(id){
   currentMemoId=id;
   const snap=await getDoc(doc(db,'users',auth.currentUser.uid,'memos',id));
@@ -257,10 +250,7 @@ async function saveMemo(){
   await setDoc(doc(db,'users',auth.currentUser.uid,'memos',currentMemoId),{title,content:editor.innerHTML,updated:Date.now()},{merge:true});
 }
 
-editor.addEventListener('input',saveMemo);
-titleInput.addEventListener('input',saveMemo);
-
-/* ------------------- Preview ------------------- */
+/* --- Preview --- */
 function showPreview(id,title,content){
   previewContent.innerHTML=`<strong>${title}</strong><br>${content}`;
   preview.hidden=false;
@@ -269,24 +259,16 @@ function showPreview(id,title,content){
   closePreview.onclick=()=>preview.hidden=true;
 }
 
-/* ------------------- Navigate ------------------- */
+/* --- Navigation --- */
 async function navigate(){
   const hash = location.hash;
-  if(hash.startsWith('#/editor/')) {
-    await openEditor(hash.split('/')[2]);
-  }
-  else if(hash === '#/list' || hash === '') {
-    await loadMemos();
-    show('list');
-  }
-  else if(hash === '#/trash') {
-    await loadTrash();
-    show('trash');
-  }
-  else if(hash === '#login') show('login');
+  if(hash.startsWith('#/editor/')) await openEditor(hash.split('/')[2]);
+  else if(hash==='#/list'||hash===''){ await loadMemos(); show('list'); }
+  else if(hash==='#/trash'){ await loadTrash(); show('trash'); }
+  else if(hash==='#login') show('login');
 }
 
-/* ------------------- Buttons ------------------- */
+/* --- Buttons --- */
 document.getElementById('back').onclick=()=>location.hash='#/list';
 document.getElementById('back-list').onclick=()=>location.hash='#/list';
 document.getElementById('go-trash').onclick=()=>location.hash='#/trash';
@@ -294,7 +276,6 @@ document.getElementById('new-memo').onclick=async()=>{
   const ref=await addDoc(collection(db,'users',auth.currentUser.uid,'memos'),{title:'',content:'',updated:Date.now(),deletedAt:null});
   location.hash=`#/editor/${ref.id}`;
 };
-
 </script>
 </body>
 </html>
