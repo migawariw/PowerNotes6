@@ -115,39 +115,29 @@ const closePreview=document.getElementById('close-preview');
 
 let currentMemoId=null;
 let longPressTimer=null;
-let isComposing=false;
 
 function showToast(msg,d=2000){ toast.textContent=msg; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'),d); }
 function show(view){ Object.values(views).forEach(v=>v.hidden=true); views[view].hidden=false; }
 
 const provider=new GoogleAuthProvider();
 
-// Auth
 document.getElementById('login').onclick=()=>signInWithEmailAndPassword(auth,emailInput.value,passwordInput.value);
 document.getElementById('signup').onclick=()=>createUserWithEmailAndPassword(auth,emailInput.value,passwordInput.value);
 document.getElementById('google-login').onclick=async()=>{ try{ await signInWithPopup(auth,provider); } catch(e){ alert("エラー\n"+e.code); } }
 
 userIcon.onclick=()=>{ userMenu.style.display=(userMenu.style.display==='block')?'none':'block'; }
 document.getElementById('switch-account').onclick=async()=>{ userMenu.style.display='none'; try{ await signInWithPopup(auth,provider); } catch(e){ alert("切替失敗"); } }
-document.getElementById('logout-btn').onclick=()=>{ userMenu.style.display='none'; signOut(auth); location.hash='#login'; }
+document.getElementById('logout-btn').onclick=()=>{ userMenu.style.display='none'; signOut(auth); location.hash=''; }
 
-// SPA navigate
-function navigate(){
-  const hash = location.hash;
-  if(hash.startsWith('#/editor/')) openEditor(hash.split('/')[2]);
-  else if(hash === '#/list') { show('list'); loadMemos(); }
-  else if(hash === '#/trash') { show('trash'); loadTrash(); }
-  else if(hash === '#login') show('login');
-}
-
-// ページロード時
-window.addEventListener('DOMContentLoaded',()=>{
-  if(!location.hash) location.hash = '#/list';
-  navigate();
+onAuthStateChanged(auth,user=>{
+  if(user){
+    if(user.photoURL) userIcon.src=user.photoURL;
+    location.hash = location.hash || '#/list'; // ログイン後リスト表示
+  } else {
+    location.hash = '#/login';
+  }
 });
-window.addEventListener('hashchange', navigate);
 
-// Memo operations
 async function loadMemos(){
   memoList.innerHTML='';
   const q=query(collection(db,'users',auth.currentUser.uid,'memos'),orderBy('updated','desc'));
@@ -159,7 +149,7 @@ async function loadMemos(){
     li.textContent=data.title||'Untitled';
     const rightDiv=document.createElement('div'); rightDiv.className='memo-right';
     const dateSpan=document.createElement('span'); dateSpan.className='date-span';
-    dateSpan.textContent=new Date(data.updated).toLocaleString();
+    dateSpan.textContent=new Date(data.updated).toLocaleString([],{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
     const menuBtn=document.createElement('button'); menuBtn.textContent='…'; menuBtn.className='menu-btn';
     const menuPopup=document.createElement('div'); menuPopup.className='menu-popup';
     const copyAction=document.createElement('button'); copyAction.textContent='Copy'; copyAction.onclick=async(e)=>{ e.stopPropagation(); navigator.clipboard.writeText(data.content||''); showToast('Copied'); menuPopup.style.display='none'; }
@@ -168,9 +158,11 @@ async function loadMemos(){
     menuBtn.onclick=(e)=>{ e.stopPropagation(); menuPopup.style.display=(menuPopup.style.display==='block')?'none':'block'; }
     rightDiv.append(dateSpan,menuBtn,menuPopup);
     li.appendChild(rightDiv);
+
     li.addEventListener('mousedown',()=>{ longPressTimer=setTimeout(()=>{ showPreview(d.id,data.title,data.content); },500); });
     li.addEventListener('mouseup',()=>{ clearTimeout(longPressTimer); });
     li.addEventListener('mouseleave',()=>{ clearTimeout(longPressTimer); });
+
     li.onclick=()=>location.hash=`#/editor/${d.id}`;
     memoList.appendChild(li);
   });
@@ -188,7 +180,7 @@ async function loadTrash(){
     li.textContent=data.title||'Untitled';
     const rightDiv=document.createElement('div'); rightDiv.className='memo-right';
     const dateSpan=document.createElement('span'); dateSpan.className='date-span';
-    dateSpan.textContent=new Date(data.deletedAt).toLocaleString();
+    dateSpan.textContent=new Date(data.deletedAt).toLocaleString([],{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
     const restoreBtn=document.createElement('button'); restoreBtn.textContent='Restore'; restoreBtn.onclick=async(e)=>{ e.stopPropagation(); await setDoc(doc(db,'users',auth.currentUser.uid,'memos',d.id),{deletedAt:null},{merge:true}); li.remove(); showToast('Restored'); }
     const deleteBtn=document.createElement('button'); deleteBtn.textContent='Delete'; deleteBtn.onclick=async(e)=>{ e.stopPropagation(); await setDoc(doc(db,'users',auth.currentUser.uid,'memos',d.id),{deletedAt:Date.now()-31*24*60*60*1000},{merge:true}); li.remove(); showToast('Deleted'); }
     rightDiv.append(dateSpan,restoreBtn,deleteBtn);
@@ -206,32 +198,23 @@ async function openEditor(id){
   show('editor');
 }
 
+document.getElementById('back').onclick=()=>location.hash='#/list';
+document.getElementById('back-list').onclick=()=>location.hash='#/list';
+document.getElementById('new-memo').onclick=async()=>{
+  const ref=await addDoc(collection(db,'users',auth.currentUser.uid,'memos'),{title:'',content:'',updated:Date.now(),deletedAt:null});
+  location.hash=`#/editor/${ref.id}`;
+}
+document.getElementById('go-trash').onclick=()=>location.hash='#/trash';
+
 async function saveMemo(){
   if(!currentMemoId) return;
   let title=titleInput.value.trim();
   if(!title) title=editor.innerText.split('\n')[0].trim()||'';
   await setDoc(doc(db,'users',auth.currentUser.uid,'memos',currentMemoId),{title,content:editor.innerHTML,updated:Date.now()},{merge:true});
 }
+editor.addEventListener('input',saveMemo);
+titleInput.addEventListener('input',saveMemo);
 
-// Buttons
-document.getElementById('new-memo').onclick=async()=>{
-  const ref=await addDoc(collection(db,'users',auth.currentUser.uid,'memos'),{title:'',content:'',updated:Date.now(),deletedAt:null});
-  location.hash=`#/editor/${ref.id}`;
-}
-document.getElementById('back').onclick=()=>location.hash='#/list';
-document.getElementById('back-list').onclick=()=>location.hash='#/list';
-document.getElementById('go-trash').onclick=()=>location.hash='#/trash';
-
-// Preview
-function showPreview(id,title,content){
-  previewContent.innerHTML=`<strong>${title}</strong><br>${content}`;
-  preview.hidden=false;
-  copyBtn.onclick=()=>{ navigator.clipboard.writeText(content||''); showToast('Copied'); }
-  deleteBtn.onclick=async()=>{ await setDoc(doc(db,'users',auth.currentUser.uid,'memos',id),{deletedAt:Date.now()},{merge:true}); preview.hidden=true; loadMemos(); showToast('Moved to Trash'); }
-  closePreview.onclick=()=>preview.hidden=true;
-}
-
-// Editor paste handling
 editor.addEventListener('paste',e=>{
   e.preventDefault();
   const items=e.clipboardData.items;
@@ -249,10 +232,22 @@ editor.addEventListener('paste',e=>{
   else{ const urlRegex=/https?:\/\/\S+\.(?:png|jpg|jpeg|gif)/i; const m=text.match(urlRegex); if(m){ const img=document.createElement('img'); img.src=m[0]; range.insertNode(img); range.collapse(false); saveMemo(); } else{ document.execCommand('insertText',false,text); saveMemo(); } }
 });
 
-editor.addEventListener('compositionstart',()=>{ isComposing=true; });
-editor.addEventListener('compositionend',()=>{ isComposing=false; saveMemo(); });
-editor.addEventListener('input',()=>{ if(!isComposing) saveMemo(); });
-titleInput.addEventListener('input',()=>{ if(!isComposing) saveMemo(); });
+function showPreview(id,title,content){
+  previewContent.innerHTML=`<strong>${title}</strong><br>${content}`;
+  preview.hidden=false;
+  copyBtn.onclick=()=>{ navigator.clipboard.writeText(content||''); showToast('Copied'); }
+  deleteBtn.onclick=async()=>{ await setDoc(doc(db,'users',auth.currentUser.uid,'memos',id),{deletedAt:Date.now()},{merge:true}); preview.hidden=true; loadMemos(); showToast('Moved to Trash'); }
+  closePreview.onclick=()=>preview.hidden=true;
+}
+
+// Hash管理でビュー切替
+window.addEventListener('hashchange',async ()=>{
+  const hash = location.hash;
+  if(hash === '#/login'){ show('login'); }
+  else if(hash === '#/list'){ await loadMemos(); show('list'); }
+  else if(hash === '#/trash'){ await loadTrash(); show('trash'); }
+  else if(hash.startsWith('#/editor/')){ openEditor(hash.split('/')[2]); }
+});
 
 </script>
 </body>
